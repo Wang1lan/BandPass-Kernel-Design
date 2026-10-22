@@ -20,14 +20,14 @@ bp.fRadius_1 = 4;
 bp.sigmaHighFreq_1 = 0.6;
 bp.sigmaLowFreq_1 = 0.2;
 bp.scaleLowFreq_1 = 0.8;      
-detailGain_1 = 5;     % 叠加到原图的增量系数
+detailGain_1 = 3;     % 叠加到原图的增量系数
 
 % 中高频段
 bp.fRadius_2 = 3;
 bp.sigmaHighFreq_2 = 1;
 bp.sigmaLowFreq_2 = 0.5;
 bp.scaleLowFreq_2 = 0.95;
-detailGain_2 = 2.5;
+detailGain_2 = 3;
 
 maskParams.Te = round(255 * 0.93);
 maskParams.Th = round(255 * 0.85);
@@ -246,10 +246,17 @@ saveName = ['-', num2str(bp.fRadius_1), '_', ...
             '_', num2str(bp.scaleLowFreq_1), '_', num2str(detailGain_1), '-', num2str(bp.fRadius_2), '_', ...
             num2str(bp.sigmaHighFreq_2), '_', num2str(bp.sigmaLowFreq_2),...
             '_', num2str(bp.scaleLowFreq_2), '_', num2str(detailGain_2)];
+
+if denoise.enable == true
+    isdeniose = 'dN';
+elseif denoise.enable == false
+    isdeniose = 'N';
+end
+
 if runRGB
-    imwrite(imgEnhRGB, fullfile(savePath, ['RGB' saveName '.png']));
+    imwrite(imgEnhRGB, fullfile(savePath, ['RGB-' isdeniose saveName '.png']));
 end
 if runY
-    imwrite(imgEnhY, fullfile(savePath, ['Y' saveName '.png']));
+    imwrite(imgEnhY, fullfile(savePath, ['Y-' isdeniose saveName '.png']));
 end
 %}
