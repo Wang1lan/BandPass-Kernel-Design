@@ -4,30 +4,55 @@ close all;
 
 % 双带通增强实验。参数集中在下方，输入为 RGB uint8。
 projectDir = fileparts(mfilename('fullpath'));
-imgPath = fullfile(projectDir, 'testImg_NBI', 'olymRaw.jpg');
+imgPath = fullfile(projectDir, 'testImg', 'olymRaw.jpg');
 
-enhanceMode = 'Y'; % 'RGB'、'Y' 或 'BOTH'；BOTH 独立对比两种增强
-denoise.enable = false; % 与 PCA 评价开关 enableNoise 独立
-denoise.mode = 'Y'; % 'RGB' 联合去噪或仅 'Y' 去噪，与增强模式独立
+enhanceMode = 'RGB'; % 'RGB'、'Y' 或 'BOTH'；BOTH 独立对比两种增强
+denoise.enable = true; % 与 PCA 评价开关 enableNoise 独立
+denoise.method = 'guided'; % 'bilateral' 双边或 'guided' 引导去噪
+denoise.mode = 'Y'; % 'RGB' 三通道或仅 'Y' 去噪，与增强模式独立
 denoise.windowSize = 5; % 实际窗口边长，正奇数；1 表示不做邻域平均
-denoise.sigmaSpatial = 1.5; % 单位：像素
-denoise.sigmaRange = 10; % 单位：8 位灰度级
+denoise.sigmaSpatial = 1.5; % 仅双边，单位：像素
+denoise.sigmaRange = 10; % 仅双边，单位：8 位灰度级
+denoise.guidedEps = 1; % 仅引导，单位：灰度级平方
 
 detailSign = 1; % 默认核主通带已用带符号响应和正弦输入核对为同相
 
 % 低中频段
-bp.fRadius_1 = 4;
+bp.fRadius_1 = 5;
 bp.sigmaHighFreq_1 = 0.6;
 bp.sigmaLowFreq_1 = 0.2;
 bp.scaleLowFreq_1 = 0.8;      
-detailGain_1 = 3;     % 叠加到原图的增量系数
+detailGain_1 = 8;     % 叠加到原图的增量系数
 
 % 中高频段
 bp.fRadius_2 = 3;
 bp.sigmaHighFreq_2 = 1;
 bp.sigmaLowFreq_2 = 0.5;
 bp.scaleLowFreq_2 = 0.95;
-detailGain_2 = 3;
+detailGain_2 = 4;
+
+% 手动启用保存示例；分支、去噪方法/通道和核参数区分结果，使用无损 PNG。
+%{
+savePath = fullfile(projectDir, 'result./testImg_2');
+saveName = ['-', num2str(bp.fRadius_1), '_', ...
+            num2str(bp.sigmaHighFreq_1), '_', num2str(bp.sigmaLowFreq_1),...
+            '_', num2str(bp.scaleLowFreq_1), '_', num2str(detailGain_1), '-', num2str(bp.fRadius_2), '_', ...
+            num2str(bp.sigmaHighFreq_2), '_', num2str(bp.sigmaLowFreq_2),...
+            '_', num2str(bp.scaleLowFreq_2), '_', num2str(detailGain_2)];
+
+if denoise.enable == true
+    isdeniose = ['dN-' denoise.method '-' denoise.mode];
+elseif denoise.enable == false
+    isdeniose = 'N';
+end
+
+if runRGB
+    imwrite(imgEnhRGB, fullfile(savePath, ['RGB-' isdeniose saveName '.png']));
+end
+if runY
+    imwrite(imgEnhY, fullfile(savePath, ['Y-' isdeniose saveName '.png']));
+end
+%}
 
 maskParams.Te = round(255 * 0.93);
 maskParams.Th = round(255 * 0.85);
@@ -84,14 +109,25 @@ assert(all(isfinite([evalParams.highlightDistance evalParams.borderWidth])) && .
 assert(any(strcmp(enhanceMode, {'RGB', 'Y', 'BOTH'})), ...
     'enhanceMode 必须为 RGB、Y 或 BOTH。');
 if denoise.enable
+    assert(any(strcmp(denoise.method, {'bilateral', 'guided'})), ...
+        'denoise.method 必须为 bilateral 或 guided。');
     assert(any(strcmp(denoise.mode, {'RGB', 'Y'})), 'denoise.mode 必须为 RGB 或 Y。');
     assert(isscalar(denoise.windowSize) && isfinite(denoise.windowSize) && ...
         denoise.windowSize > 0 && mod(denoise.windowSize, 2) == 1, ...
         '去噪窗口边长必须为有限正奇整数。');
-    assert(isscalar(denoise.sigmaSpatial) && isfinite(denoise.sigmaSpatial) && ...
-        denoise.sigmaSpatial > 0 && isscalar(denoise.sigmaRange) && ...
-        isfinite(denoise.sigmaRange) && denoise.sigmaRange > 0, ...
-        '去噪 sigma 必须为有限正数。');
+    switch denoise.method
+        case 'bilateral'
+            assert(isscalar(denoise.sigmaSpatial) && isfinite(denoise.sigmaSpatial) && ...
+                denoise.sigmaSpatial > 0 && isscalar(denoise.sigmaRange) && ...
+                isfinite(denoise.sigmaRange) && denoise.sigmaRange > 0, ...
+                '去噪 sigma 必须为有限正数。');
+        case 'guided'
+            assert(isscalar(denoise.guidedEps) && isfinite(denoise.guidedEps) && ...
+                denoise.guidedEps > 0, 'guidedEps 必须为有限正标量。');
+            assert(denoise.windowSize <= min(size(img,1), size(img,2)), ...
+                '引导滤波窗口边长不能超过图像尺寸。');
+            assert(exist('imguidedfilter', 'file') == 2, '引导去噪需要 imguidedfilter。');
+    end
 end
 runRGB = strcmp(enhanceMode, 'RGB') || strcmp(enhanceMode, 'BOTH');
 runY = strcmp(enhanceMode, 'Y') || strcmp(enhanceMode, 'BOTH');
@@ -116,19 +152,30 @@ I0 = double(img);
 Iwork = I0;
 denoiseLabel = '去噪关闭';
 if denoise.enable
+    switch denoise.method
+        case 'bilateral'
+            denoiseFcn = @(src) bilateralFilterShiftSum(src, denoise.windowSize, ...
+                denoise.sigmaSpatial, denoise.sigmaRange);
+            denoiseLabel = [denoise.mode ' 双边去噪'];
+            fprintf('method=%s, mode=%s, windowSize=%d, sigmaSpatial=%.9g, sigmaRange=%.9g\n', ...
+                denoise.method, denoise.mode, denoise.windowSize, ...
+                denoise.sigmaSpatial, denoise.sigmaRange);
+        case 'guided'
+            denoiseFcn = @(src) imguidedfilter(src, src, ...
+                'NeighborhoodSize', [denoise.windowSize denoise.windowSize], ...
+                'DegreeOfSmoothing', denoise.guidedEps);
+            denoiseLabel = [denoise.mode ' 引导去噪'];
+            fprintf('method=%s, mode=%s, windowSize=%d, guidedEps=%.9g\n', ...
+                denoise.method, denoise.mode, denoise.windowSize, denoise.guidedEps);
+    end
     if strcmp(denoise.mode, 'RGB')
-        Iwork = bilateralFilterShiftSum(I0, denoise.windowSize, ...
-            denoise.sigmaSpatial, denoise.sigmaRange);
+        Iwork = denoiseFcn(I0);
     else
         ycc0 = rgbToYCbCrFull(I0);
         yccDenoised = ycc0;
-        yccDenoised(:,:,1) = bilateralFilterShiftSum(ycc0(:,:,1), ...
-            denoise.windowSize, denoise.sigmaSpatial, denoise.sigmaRange);
+        yccDenoised(:,:,1) = denoiseFcn(ycc0(:,:,1));
         Iwork = yCbCrFullToRgb(yccDenoised);
     end
-    denoiseLabel = [denoise.mode ' 双边去噪'];
-    fprintf('去噪=%s, windowSize=%d, sigmaSpatial=%.9g, sigmaRange=%.9g\n', ...
-        denoise.mode, denoise.windowSize, denoise.sigmaSpatial, denoise.sigmaRange);
 end
 
 %% 两条独立增强分支：底图与两路细节均来自 Iwork
@@ -237,26 +284,3 @@ if enableNoise
             noiseY.sigmaOrig, noiseY.sigmaEnh, noiseY.noiseGain);
     end
 end
-
-% 手动启用保存示例；分支名与时间戳区分结果，使用无损 PNG。
-%{
-savePath = fullfile(projectDir, 'result./testImg_3');
-saveName = ['-', num2str(bp.fRadius_1), '_', ...
-            num2str(bp.sigmaHighFreq_1), '_', num2str(bp.sigmaLowFreq_1),...
-            '_', num2str(bp.scaleLowFreq_1), '_', num2str(detailGain_1), '-', num2str(bp.fRadius_2), '_', ...
-            num2str(bp.sigmaHighFreq_2), '_', num2str(bp.sigmaLowFreq_2),...
-            '_', num2str(bp.scaleLowFreq_2), '_', num2str(detailGain_2)];
-
-if denoise.enable == true
-    isdeniose = 'dN';
-elseif denoise.enable == false
-    isdeniose = 'N';
-end
-
-if runRGB
-    imwrite(imgEnhRGB, fullfile(savePath, ['RGB-' isdeniose saveName '.png']));
-end
-if runY
-    imwrite(imgEnhY, fullfile(savePath, ['Y-' isdeniose saveName '.png']));
-end
-%}
